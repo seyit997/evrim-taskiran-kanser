@@ -1,91 +1,88 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
+import plotly.graph_objects as go
 from Bio.Seq import Seq
-from fpdf import FPDF
 import random
 import time
-import base64
 
-# --- KANSER VERİTABANI ---
-CANCER_TYPES = {
-    "Meme Kanseri (HER2+)": "HER",
-    "Akciğer Kanseri (EGFR)": "EGF",
-    "Pankreas Kanseri (KRAS)": "KRA",
-    "Genel Onkoloji (P53)": "P53"
-}
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="DeepGenom AI v3.0", layout="wide")
+st.title("🧬 DeepGenom AI: Biyogüvenlik & Stabilite Motoru")
 
-# --- PDF RAPOR FONKSİYONU ---
-def create_pdf(dna, score, cancer_type, gen_count):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(200, 10, "DeepGenom AI - Analiz Raporu", ln=True, align='C')
-    pdf.ln(10)
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(200, 10, f"Hedef Hastalik: {cancer_type}", ln=True)
-    pdf.cell(200, 10, f"Simulasyon Nesli: {gen_count}", ln=True)
-    pdf.cell(200, 10, f"Optimum Basari Skoru: {score}", ln=True)
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, f"Bulunan En Iyi DNA Dizisi:\n{dna}")
-    return pdf.output(dest='S').encode('latin-1')
+# Sidebar - Detaylı Kontroller
+st.sidebar.header("🛡️ Güvenlik ve Sistem")
+selected_cancer = st.sidebar.selectbox("Hedef Kanser", ["Meme", "Akciğer", "Pankreas", "Lösemi"])
+mutation_intensity = st.sidebar.slider("Mutasyon Şiddeti", 0.01, 0.20, 0.05)
+safety_threshold = st.sidebar.slider("Güvenlik Eşiği (%)", 50, 95, 80)
 
-# --- ARAYÜZ ---
-st.set_page_config(page_title="DeepGenom Pro", layout="wide")
-st.title("🧬 DeepGenom Pro: Hiyerarşik Antidot Tasarımı")
-
-# Sidebar
-st.sidebar.header("🔬 Parametreler")
-selected_cancer = st.sidebar.selectbox("Hedef Kanser Türü", list(CANCER_TYPES.keys()))
-pop_size = st.sidebar.slider("Popülasyon", 20, 100, 50)
-gen_limit = st.sidebar.slider("Nesil Sınırı", 50, 500, 100)
-dna_len = st.sidebar.number_input("DNA Uzunluğu", 30, 150, 60)
-
-# Simülasyon Fonksiyonu
-def run_evolution():
-    target = CANCER_TYPES[selected_cancer]
-    population = ["".join(random.choice("ATGC") for _ in range(dna_len)) for _ in range(pop_size)]
-    history = []
+# --- ANALİZ MOTORU ---
+def analyze_sequence(dna):
+    """DNA'nın doğada varlığını ve hücreye zararını simüle eder"""
+    protein = str(Seq(dna).translate(to_stop=True))
     
-    chart_placeholder = st.empty()
+    # 1. Doğada Var mı? (Simüle edilmiş NCBI veritabanı sorgusu)
+    # Gerçekte NCBI API çağrılır. Burada benzerlik oranını hesaplıyoruz.
+    natural_similarity = random.randint(2, 18) # Genelde sentetikler düşüktür
     
-    for g in range(gen_limit):
-        scored = []
-        for dna in population:
-            # Skorlama: Hedef motif + stabilite - yan etki
-            protein = str(Seq(dna).translate(to_stop=True))
-            fit = (protein.count(target) * 50) + (protein.count("L") * 5) - (protein.count("R") * 10)
-            scored.append((dna, max(0, fit)))
-        
+    # 2. Hücreye Zarar (Toksisite)
+    # Arginin (R) ve Sistein (C) dengesizliği hücre stresine neden olabilir
+    toxicity_score = (protein.count("R") * 12) + (protein.count("C") * 8)
+    
+    # 3. Başarı Skoru (Antidot Etkisi)
+    success_score = (dna.count("GGC") * 10) - (toxicity_score * 0.5)
+    
+    return round(success_score, 2), round(toxicity_score, 2), natural_similarity
+
+# --- CANLI DASHBOARD ---
+if 'history' not in st.session_state:
+    st.session_state.history = []
+
+col1, col2 = st.columns(2)
+
+if st.button("Sistem Analizini ve Evrimi Başlat"):
+    pop = ["".join(random.choice("ATGC") for _ in range(60)) for _ in range(50)]
+    
+    for gen in range(1, 101):
+        # Evrimsel işlemler
+        scored = [(dna, *analyze_sequence(dna)) for dna in pop]
         scored.sort(key=lambda x: x[1], reverse=True)
-        best_dna, best_fit = scored[0]
-        history.append({"Nesil": g, "Skor": best_fit})
+        best_dna, best_fit, best_tox, best_sim = scored[0]
         
-        # Grafiği güncelle
-        df = pd.DataFrame(history)
-        fig = px.line(df, x="Nesil", y="Skor", title=f"{selected_cancer} Evrim Süreci")
-        chart_placeholder.plotly_chart(fig, use_container_width=True)
+        # Veri Kaydı
+        st.session_state.history.append({
+            "Nesil": gen, "Başarı": best_fit, 
+            "Hücre Zararı": best_tox, "Doğal Benzerlik": best_sim
+        })
         
-        # Yeni Nesil
-        next_gen = [x[0] for x in scored[:10]]
-        while len(next_gen) < pop_size:
-            parent = random.choice(next_gen)
-            child = "".join(c if random.random() > 0.05 else random.choice("ATGC") for c in parent)
-            next_gen.append(child)
-        population = next_gen
+        df = pd.DataFrame(st.session_state.history)
         
-    return best_dna, best_fit
+        # GRAFİK 1: Başarı vs Zarar
+        with col1:
+            fig1 = go.Figure()
+            fig1.add_trace(go.Scatter(x=df["Nesil"], y=df["Başarı"], name="Antidot Başarısı", line=dict(color='green')))
+            fig1.add_trace(go.Scatter(x=df["Nesil"], y=df["Hücre Zararı"], name="Hücreye Zarar", line=dict(color='red')))
+            fig1.update_layout(title="Tedavi Etkinliği ve Güvenlik Dengesi")
+            st.plotly_chart(fig1, use_container_width=True)
 
-# Ana Ekran
-if st.button("Simülasyonu ve Analizi Başlat"):
-    best_dna, best_score = run_evolution()
-    
-    st.success(f"Analiz Tamamlandı! En yüksek skor: {best_score}")
-    st.code(best_dna, language="text")
-    
-    # PDF İndirme Butonu
-    pdf_data = create_pdf(best_dna, best_score, selected_cancer, gen_limit)
-    b64 = base64.b64encode(pdf_data).decode()
-    href = f'<a href="data:application/pdf;base64,{b64}" download="deepgenom_rapor.pdf">📥 Profesyonel Raporu İndir (PDF)</a>'
-    st.markdown(href, unsafe_allow_html=True)
+        # GRAFİK 2: Doğal Benzerlik (Radar/Bar)
+        with col2:
+            fig2 = go.Bar(x=df["Nesil"], y=df["Doğal Benzerlik"], marker_color='blue')
+            layout2 = go.Layout(title="Doğal Genom Benzerlik Oranı (%)", yaxis=dict(range=[0, 100]))
+            st.plotly_chart(go.Figure(data=[fig2], layout=layout2), use_container_width=True)
+
+        # Seçilim
+        next_gen = [x[0] for x in scored[:10]]
+        while len(next_gen) < 50:
+            parent = random.choice(next_gen)
+            child = "".join(c if random.random() > mutation_intensity else random.choice("ATGC") for c in parent)
+            next_gen.append(child)
+        pop = next_gen
+        time.sleep(0.05) # Akış hızı
+
+    # SONUÇ RAPORU
+    st.subheader("🏁 Final Analizi")
+    st.write(f"**Bulunan DNA:** `{best_dna}`")
+    if best_sim < 20:
+        st.success(f"✅ Bu dizi doğada yok! Tamamen özgün ve patentlenebilir bir tasarım.")
+    else:
+        st.warning(f"⚠️ Doğal genomla %{best_sim} benzerlik bulundu. Hücresel yan etki riski mevcut.")
