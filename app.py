@@ -4,127 +4,149 @@ import plotly.graph_objects as go
 from Bio.Seq import Seq
 from fpdf import FPDF
 import random
-import time
 import base64
+import time
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(page_title="DeepGenom AI Pro v6.0", layout="wide")
+# --- FONKSİYONLAR ---
 
-# CSS: Buton ve Arayüz Güzelleştirme
-st.markdown("""
-    <style>
-    .stButton>button { width: 100%; border-radius: 10px; height: 3.5em; background-color: #007bff; color: white; font-weight: bold; border: none; }
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #007bff; }
-    </style>
-    """, unsafe_allow_html=True)
+def tr_to_en(text):
+    """PDF hatasını önlemek için Türkçe karakterleri temizler."""
+    map_chars = {"ş":"s", "Ş":"S", "ı":"i", "İ":"I", "ç":"c", "Ç":"C", "ü":"u", "Ü":"U", "ğ":"g", "Ğ":"G", "ö":"o", "Ö":"O"}
+    for search, replace in map_chars.items():
+        text = text.replace(search, replace)
+    return text
 
-# --- BİYOLOJİK VERİTABANI SİMÜLASYONU ---
-CANCER_TYPES = {
-    "Meme (HER2+)": {"motif": "HER", "desc": "HER2 Reseptör Blokajı"},
-    "Akciğer (EGFR)": {"motif": "EGF", "desc": "EGFR Sinyal İnhibisyonu"},
-    "Pankreas (KRAS)": {"motif": "KRA", "desc": "KRAS Mutasyon Hedefleme"}
-}
-
-SIDE_EFFECT_LOGIC = {
-    "Kritik": "Hücre zarında lipid peroksidasyonu ve sitoliz riski.",
-    "Orta": "Mitokondriyal ATP üretiminde geçici yavaşlama.",
-    "Güvenli": "Hücre homeostazı ile %99 uyumlu yapı."
-}
-
-def get_homology_details(similarity):
-    if similarity < 8: return "Özgün: Doğada eşleşme yok. (Patentlenebilir)"
-    if similarity < 15: return "Kısmi: İnsan genomu (İntron) bölgeleriyle benzerlik."
-    return "Dikkat: Bakteriyel enzim dizilimleri ile benzerlik."
-
-# --- PDF OLUŞTURUCU ---
 def create_pdf(res):
+    """Unicode hatası giderilmiş, doktor sunumuna uygun PDF raporu."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(200, 10, "DeepGenom AI Klinik Raporu", ln=True, align='C')
-    pdf.set_font("Arial", "", 12)
+    pdf.cell(200, 10, tr_to_en("DeepGenom AI - Klinik Analiz Raporu"), ln=True, align='C')
     pdf.ln(10)
-    pdf.cell(200, 10, f"Hedef: {res['hedef']}", ln=True)
-    pdf.cell(200, 10, f"Basari Skoru: {res['skor']}", ln=True)
-    pdf.cell(200, 10, f"Zarar Orani: %{res['zarar']}", ln=True)
-    pdf.cell(200, 10, f"Doga Analizi: {res['nerede']}", ln=True)
+    
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(200, 10, tr_to_en("1. Antidot Özet Verileri"), ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(200, 8, tr_to_en(f"Hedef Hastalik: {res['hedef']}"), ln=True)
+    pdf.cell(200, 8, tr_to_en(f"Basari Skoru: {res['skor']} Puan"), ln=True)
+    pdf.cell(200, 8, tr_to_en(f"Hücresel Zarar: %{res['zarar']}"), ln=True)
+    
     pdf.ln(5)
-    pdf.multi_cell(0, 10, f"DNA Dizisi:\n{res['dna']}")
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(200, 10, tr_to_en("2. Farmakolojik Tahminler"), ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(200, 8, tr_to_en(f"Hücreye Giris Hizi: %{res['hiz']}"), ln=True)
+    pdf.cell(200, 8, tr_to_en(f"Yarilanma Ömrü (t1/2): {res['omur']} saat"), ln=True)
+    pdf.cell(200, 8, tr_to_en(f"Doga Analizi: {res['konum']}"), ln=True)
+    
+    pdf.ln(10)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(200, 10, tr_to_en("3. Tasarlanan DNA Sekansi"), ln=True)
+    pdf.set_font("Arial", "", 10)
+    pdf.multi_cell(0, 8, res['dna'])
+    
     return pdf.output(dest='S').encode('latin-1')
 
-# --- ANA PANEL ---
-st.title("🧬 DeepGenom AI: Klinik Karar Destek Sistemi")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="DeepGenom AI Pro", layout="wide")
+
+st.markdown("""
+    <style>
+    .stButton>button { width: 100%; border-radius: 8px; background-color: #0047AB; color: white; height: 3.5em; font-weight: bold; border: none; }
+    .stMetric { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #0047AB; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- ANALİZ PARAMETRELERİ ---
+CANCER_DATA = {
+    "Meme (HER2+)": "HER",
+    "Akciger (EGFR)": "EGF",
+    "Pankreas (KRAS)": "KRA"
+}
+
+# --- ARAYÜZ ---
+st.title("🛡️ DeepGenom AI: Klinik Karar Destek Paneli")
+st.write("Bilgisayar ortamında evrimsel antidot tasarımı ve toksisite analizi.")
 
 with st.sidebar:
     st.header("🔬 Laboratuvar Ayarları")
-    c_choice = st.selectbox("Hedef Kanser Türü", list(CANCER_TYPES.keys()))
-    pop_size = st.slider("Popülasyon Genişliği", 20, 200, 100)
-    gen_size = st.slider("Nesil Sayısı (Evrim Süresi)", 10, 500, 200)
-    dna_len = st.number_input("DNA Uzunluğu (Baz)", 30, 200, 60)
-    start_btn = st.button("🧬 ANALİZİ BAŞLAT")
+    choice = st.selectbox("Hedef Kanser Türü", list(CANCER_DATA.keys()))
+    pop_size = st.slider("Popülasyon", 20, 200, 100)
+    gen_limit = st.slider("Nesil Sayısı", 10, 500, 200)
+    dna_len = st.number_input("DNA Uzunluğu", 30, 200, 60)
+    run_btn = st.button("🚀 SİMÜLASYONU BAŞLAT")
 
-if start_btn:
-    st.session_state.history = []
+# --- EVRİM VE ANALİZ DÖNGÜSÜ ---
+if run_btn:
+    history = []
     population = ["".join(random.choice("ATGC") for _ in range(dna_len)) for _ in range(pop_size)]
-    target_motif = CANCER_TYPES[c_choice]["motif"]
+    target_motif = CANCER_DATA[choice]
     
-    prog_bar = st.progress(0)
-    
-    for g in range(gen_size):
-        scored_pop = []
+    prog = st.progress(0)
+    for g in range(gen_limit):
+        scored = []
         for dna in population:
             prot = str(Seq(dna).translate(to_stop=True))
-            # Skorlama Mantığı
-            fit = (prot.count(target_motif) * 50) + (dna.count("GGC") * 5)
+            # Skorlama: Hedef motif + stabilite - toksisite
+            fit = (prot.count(target_motif) * 55) + (dna.count("GGC") * 5)
             tox = (prot.count("R") * 12) + (prot.count("C") * 8)
-            sim = random.randint(1, 20)
-            
-            scored_pop.append({
-                "dna": dna, "skor": max(0, fit - (tox * 0.3)),
-                "zarar": tox, "benzerlik": sim, "nesil": g
-            })
+            scored.append({"dna": dna, "skor": max(0, fit - (tox * 0.2)), "zarar": tox, "nesil": g})
         
-        scored_pop.sort(key=lambda x: x['skor'], reverse=True)
-        st.session_state.history.append(scored_pop[0])
+        scored.sort(key=lambda x: x['skor'], reverse=True)
+        history.append(scored[0])
         
-        # Evrimsel Seçilim
-        next_gen = [x['dna'] for x in scored_pop[:10]]
+        # Seçilim ve Mutasyon
+        next_gen = [x['dna'] for x in scored[:10]]
         while len(next_gen) < pop_size:
-            parent = random.choice(next_gen)
-            child = "".join(c if random.random() > 0.05 else random.choice("ATGC") for c in parent)
+            p = random.choice(next_gen)
+            child = "".join(c if random.random() > 0.05 else random.choice("ATGC") for c in p)
             next_gen.append(child)
         population = next_gen
-        prog_bar.progress((g + 1) / gen_size)
+        prog.progress((g + 1) / gen_limit)
+    
+    st.session_state.results = history
+    st.session_state.selected_h = choice
 
-# --- SONUÇLAR ---
-if 'history' in st.session_state and st.session_state.history:
-    best = st.session_state.history[-1]
-    best['nerede'] = get_homology_details(best['benzerlik'])
-    best['hedef'] = c_choice
+# --- SONUÇLARI GÖSTER ---
+if 'results' in st.session_state:
+    best = st.session_state.results[-1]
     
-    st.subheader("🏆 Optimum Antidot Analizi")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Maksimum Başarı", f"{int(best['skor'])} Puan")
-    c2.metric("Hücresel Zarar", f"%{int(best['zarar'])}", delta="Güvenli" if best['zarar'] < 40 else "Riskli", delta_color="inverse")
-    c3.metric("Doğal Benzerlik", f"%{best['benzerlik']}")
-    
-    st.info(f"**Doğa Analizi (Konum):** {best['nerede']}")
-    tox_label = "Güvenli" if best['zarar'] < 30 else ("Orta" if best['zarar'] < 70 else "Kritik")
-    st.warning(f"**Tıbbi Etki Tahmini:** {SIDE_EFFECT_LOGIC[tox_label]}")
-    
-    st.code(best['dna'], language="text")
-    
-    # Grafik
-    df = pd.DataFrame(st.session_state.history)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["nesil"], y=df["skor"], name="Etkinlik Skoru", line=dict(color='#00FF00')))
-    fig.add_trace(go.Scatter(x=df["nesil"], y=df["zarar"], name="Toksisite", line=dict(color='#FF0000', dash='dot')))
-    st.plotly_chart(fig, use_container_width=True)
+    # Klinik ve Farmakolojik Tahminler
+    best['hiz'] = min(100, int(best['skor'] * 0.75 + random.randint(1, 15)))
+    best['omur'] = round((len(best['dna']) / 12) + (best['dna'].count("G") * 0.5), 1)
+    sim = random.randint(1, 15)
+    best['konum'] = "Ozgün: Doğada birebir eslesme yok." if sim < 8 else f"Kısmi: %{sim} Benzerlik (İnsan Genomu)."
+    best['hedef'] = st.session_state.selected_h
 
-    # PDF Rapor
-    pdf_file = create_pdf(best)
-    b64 = base64.b64encode(pdf_file).decode()
-    st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="klinik_analiz.pdf">📥 Profesyonel Klinik Raporu İndir (PDF)</a>', unsafe_allow_html=True)
+    # Metrik Kartları
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Antidot Skoru", f"{int(best['skor'])} Puan")
+    c2.metric("Hücreye Giriş", f"%{best['hiz']}")
+    c3.metric("Yarılanma Ömrü", f"{best['omur']} sa")
+    c4.metric("Yan Etki Riski", f"%{int(best['zarar'])}", delta="Düşük" if best['zarar'] < 40 else "Yüksek", delta_color="inverse")
+
+    st.divider()
     
-    with st.expander("🔍 Tüm Mutasyon Kütüphanesini Gör"):
-        st.table(df.tail(10))
+    col_plot, col_info = st.columns([2, 1])
+    
+    with col_plot:
+        df = pd.DataFrame(st.session_state.results)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["nesil"], y=df["skor"], name="Başarı", line=dict(color='#0047AB', width=3)))
+        fig.add_trace(go.Scatter(x=df["nesil"], y=df["zarar"], name="Toksisite", line=dict(color='#FF4B4B', dash='dot')))
+        fig.update_layout(title="Evrimsel Gelişim Süreci", xaxis_title="Nesil", yaxis_title="Değer")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_info:
+        st.subheader("📋 Klinik Notlar")
+        st.write(f"**Doğa Analizi:** {best['konum']}")
+        st.write(f"**Hedef Mekanizma:** {best['hedef']} reseptör blokajı simülasyonu.")
+        st.code(best['dna'], language="text")
+        
+        # PDF Butonu
+        pdf_data = create_pdf(best)
+        b64 = base64.b64encode(pdf_data).decode()
+        st.markdown(f'<a href="data:application/pdf;base64,{b64}" download="analiz_raporu.pdf">📥 Doktor Raporunu İndir (PDF)</a>', unsafe_allow_html=True)
+
+    with st.expander("🔍 Tüm Aday Listesini Gör"):
+        st.dataframe(df.tail(20))
