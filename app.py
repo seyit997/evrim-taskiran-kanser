@@ -4,104 +4,139 @@ import plotly.graph_objects as go
 from Bio.Seq import Seq
 import random
 import time
+import base64
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="DeepGenom AI v4.0", layout="wide")
-st.title("🧬 DeepGenom AI: Klinik Karar Destek Sistemi")
+st.set_page_config(page_title="DeepGenom AI Pro", layout="wide")
 
-# --- YAN ETKİ VERİTABANI (Detaylı Analiz İçin) ---
-SIDE_EFFECTS = {
-    "Yüksek Toksisite": "Hücre zarında lipid peroksidasyonuna ve mitokondriyal strese yol açabilir.",
-    "Orta Toksisite": "Hücre bölünme hızında yavaşlama ve geçici sitoplazmik şişme riski.",
-    "Düşük Toksisite": "Minimal hücresel yük; biyo-uyumluluk oranı yüksek.",
-    "Güvenli": "Hücre homeostazı ile tam uyumlu; yan etki saptanmadı."
-}
-
-# --- ANALİZ MOTORU ---
-def analyze_sequence(dna):
-    protein = str(Seq(dna).translate(to_stop=True))
-    
-    # 1. Başarı Skoru
-    success_score = (dna.count("GGC") * 12) + (dna.count("AAA") * 5)
-    
-    # 2. Hücre Zararı ve Nedenleri
-    tox_count = protein.count("R") + protein.count("C")
-    if tox_count > 5:
-        tox_level = "Yüksek Toksisite"
-        tox_score = random.randint(70, 100)
-    elif tox_count > 2:
-        tox_level = "Orta Toksisite"
-        tox_score = random.randint(30, 69)
-    else:
-        tox_level = "Güvenli"
-        tox_score = random.randint(0, 29)
-        
-    # 3. Doğada Var mı? (Homoloji)
-    similarity = random.randint(0, 15) # Sentetik tasarımlar genelde düşüktür
-    found_in_nature = "Bulunamadı (Özgün Tasarım)" if similarity < 10 else f"Kısmi Benzerlik (%{similarity} - Homo Sapiens)"
-    
-    return {
-        "dna": dna,
-        "skor": success_score,
-        "zarar_skoru": tox_score,
-        "zarar_nedeni": SIDE_EFFECTS[tox_level],
-        "dogada_varmi": found_in_nature,
-        "benzerlik": similarity
+# --- CSS İLE GÖRSEL DÜZENLEME (Butonları Belirginleştirme) ---
+st.markdown("""
+    <style>
+    .stButton>button {
+        width: 100%;
+        border-radius: 10px;
+        height: 3em;
+        background-color: #007bff;
+        color: white;
+        font-weight: bold;
     }
+    .stExpander {
+        border: 1px solid #007bff;
+        border-radius: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- SESSION STATE ---
-if 'all_candidates' not in st.session_state:
-    st.session_state.all_candidates = []
+st.title("🛡️ DeepGenom AI: Klinik Karar Destek Sistemi")
+st.write("En az zarar, en iyi sonuç: Yapay zeka destekli biyolojik antidot tarayıcı.")
 
-# --- ANA EKRAN ---
-col1, col2 = st.columns([2, 1])
-
-with st.sidebar:
-    st.header("🧬 Analiz Ayarları")
-    target = st.selectbox("Hedef Kanser", ["Meme", "Akciğer", "Pankreas"])
-    if st.button("Simülasyonu Başlat"):
-        st.session_state.all_candidates = [] # Reset
-        pop = ["".join(random.choice("ATGC") for _ in range(60)) for _ in range(40)]
-        
-        for g in range(1, 51): # 50 Nesil hızlı analiz
-            scored = [analyze_sequence(dna) for dna in pop]
-            scored.sort(key=lambda x: x['skor'], reverse=True)
-            st.session_state.all_candidates.extend(scored)
+# --- SİMÜLASYON MOTORU ---
+def run_simulation(cancer_type, p_size, g_limit):
+    # Kurgusal hedef motifler
+    targets = {"Meme": "HER", "Akciğer": "EGF", "Pankreas": "KRA"}
+    target = targets.get(cancer_type, "P53")
+    
+    population = ["".join(random.choice("ATGC") for _ in range(60)) for _ in range(p_size)]
+    all_results = []
+    
+    progress_bar = st.progress(0)
+    for g in range(g_limit):
+        current_gen_data = []
+        for dna in population:
+            protein = str(Seq(dna).translate(to_stop=True))
             
-            # Nesil Yenileme
-            next_gen = [x['dna'] for x in scored[:5]]
-            while len(next_gen) < 40:
-                p = random.choice(next_gen)
-                child = "".join(c if random.random() > 0.05 else random.choice("ATGC") for c in p)
-                next_gen.append(child)
-            pop = next_gen
-        st.success("Analiz Tamamlandı!")
-
-# --- SONUÇLARI GÖSTER ---
-if st.session_state.all_candidates:
-    # En İyi Sonuç (Kapak)
-    best = sorted(st.session_state.all_candidates, key=lambda x: x['skor'], reverse=True)[0]
-    
-    st.subheader("🏆 En Uygun Antidot Adayı")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Başarı Skoru", best['skor'])
-    c2.metric("Hücre Zararı", f"%{best['zarar_skoru']}", delta="-Düşük" if best['zarar_skoru'] < 30 else "+Yüksek", delta_color="inverse")
-    c3.write(f"**Doğa Analizi:** {best['dogada_varmi']}")
-    
-    st.info(f"**Hücresel Etki Analizi:** {best['zarar_nedeni']}")
-    st.code(best['dna'], language="text")
-
-    st.divider()
-    
-    # Diğerlerini Göster Butonu
-    if st.checkbox("🔍 Diğer Adayları ve Detaylı Verileri Göster"):
-        st.subheader("🧪 Alternatif İlaç Kütüphanesi")
-        df_all = pd.DataFrame(st.session_state.all_candidates).drop_duplicates(subset=['dna'])
-        df_all = df_all.sort_values(by="skor", ascending=False).head(20)
+            # Başarı Skoru (Fitness)
+            success = (protein.count(target) * 45) + (dna.count("GGC") * 5)
+            
+            # Zarar Analizi (Toksisite)
+            toxicity_score = (protein.count("R") * 15) + (protein.count("C") * 10)
+            
+            # Doğa Analizi (Homoloji)
+            similarity = random.randint(1, 15)
+            
+            res = {
+                "dna": dna,
+                "skor": max(0, success - (toxicity_score * 0.2)),
+                "zarar": toxicity_score,
+                "benzerlik": similarity,
+                "nesil": g
+            }
+            current_gen_data.append(res)
         
-        for index, row in df_all.iterrows():
-            with st.expander(f"Aday #{index+1} - Skor: {row['skor']} - Zarar: %{row['zarar_skoru']}"):
-                st.write(f"**DNA Dizisi:** `{row['dna']}`")
-                st.write(f"**Doğada Var mı?** {row['dogada_varmi']}")
-                st.write(f"**Detaylı Zarar Analizi:** {row['zarar_nedeni']}")
-                st.progress(row['zarar_skoru'] / 100)
+        all_results.extend(current_gen_data)
+        
+        # Evrim: En iyileri seç ve mutasyonla yeni nesil yap
+        current_gen_data.sort(key=lambda x: x['skor'], reverse=True)
+        next_gen = [x['dna'] for x in current_gen_data[:10]]
+        while len(next_gen) < p_size:
+            p = random.choice(next_gen)
+            child = "".join(c if random.random() > 0.05 else random.choice("ATGC") for c in p)
+            next_gen.append(child)
+        population = next_gen
+        progress_bar.progress((g + 1) / g_limit)
+        
+    return pd.DataFrame(all_results)
+
+# --- ANA PANEL ---
+col_menu, col_main = st.columns([1, 3])
+
+with col_menu:
+    st.subheader("⚙️ Ayarlar")
+    c_type = st.selectbox("Hastalık Türü", ["Meme", "Akciğer", "Pankreas"])
+    pop = st.slider("Popülasyon", 20, 100, 50)
+    gens = st.slider("Nesil Sayısı", 10, 200, 50)
+    
+    start_btn = st.button("🚀 SİMÜLASYONU BAŞLAT")
+
+if start_btn:
+    with st.spinner("Genomik veriler işleniyor..."):
+        data = run_simulation(c_type, pop, gens)
+        st.session_state.final_data = data
+
+# --- SONUÇLARIN GÖSTERİLMESİ ---
+if 'final_data' in st.session_state:
+    df = st.session_state.final_data
+    best_candidate = df.sort_values(by=["skor", "zarar"], ascending=[False, True]).iloc[0]
+
+    with col_main:
+        st.subheader("🏆 Optimum Antidot Adayı (En İyi Sonuç)")
+        
+        # Özet Kartları
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Maksimum Başarı", f"{int(best_candidate['skor'])} Puan")
+        c2.metric("Hücresel Zarar", f"%{int(best_candidate['zarar'])}", delta="Kritik" if best_candidate['zarar'] > 50 else "Güvenli", delta_color="inverse")
+        c3.metric("Doğal Benzerlik", f"%{best_candidate['benzerlik']}")
+
+        # Zarar Analizi Açıklaması
+        if best_candidate['zarar'] < 30:
+            st.success("✅ **Güvenli:** Bu dizi hücre homeostazı ile tam uyumlu.")
+        elif best_candidate['zarar'] < 70:
+            st.warning("⚠️ **Orta Risk:** Hücre bölünme hızında yavaşlamaya sebep olabilir.")
+        else:
+            st.error("🚨 **Yüksek Toksisite:** Mitokondriyal strese ve hücre zarında hasara yol açabilir.")
+
+        st.info(f"**Doğa Analizi:** Bu DNA dizisi internette/doğada {'bulunmadı (Özgün)' if best_candidate['benzerlik'] < 10 else 'kısmen mevcut'}. ")
+        st.code(best_candidate['dna'], language="text")
+
+        # Grafik
+        st.divider()
+        st.subheader("📈 Gelişim ve Güvenlik Grafiği")
+        gen_avg = df.groupby("nesil").agg({"skor": "max", "zarar": "mean"}).reset_index()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=gen_avg["nesil"], y=gen_avg["skor"], name="Başarı Skoru", line=dict(color='green', width=3)))
+        fig.add_trace(go.Scatter(x=gen_avg["nesil"], y=gen_avg["zarar"], name="Ortalama Zarar", line=dict(color='red', dash='dash')))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # "DAHA FAZLA BAK" BÖLÜMÜ
+        st.divider()
+        with st.expander("🔍 DİĞER ADAYLARI VE DETAYLI ANALİZLERİ GÖR"):
+            st.write("Sistem tarafından taranan en iyi 20 alternatif dizilim:")
+            top_20 = df.sort_values(by="skor", ascending=False).drop_duplicates(subset=['dna']).head(20)
+            
+            for i, row in top_20.iterrows():
+                col_dna, col_stat = st.columns([3, 1])
+                col_dna.write(f"**Dizi:** `{row['dna']}`")
+                col_stat.write(f"Skor: {int(row['skor'])} | Zarar: %{int(row['zarar'])}")
+                st.progress(int(row['zarar']) / 100)
+                st.write(f"---")
+
