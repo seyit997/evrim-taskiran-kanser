@@ -1,22 +1,10 @@
-# --- Core Framework ---
 streamlit
-
-# --- Data Science & Math ---
 pandas
 numpy
-scipy
-
-# --- Bioinformatics ---
-biopython
-
-# --- Visualization ---
 plotly
+biopython
+fpdf
 py3Dmol
 stmol
-
-# --- Reporting ---
-fpdf
-
-# --- UI & Animations ---
 streamlit-lottie
 requests
