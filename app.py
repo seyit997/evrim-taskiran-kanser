@@ -1,125 +1,230 @@
-# app_gpu.py
+# -*- coding: utf-8 -*-
+"""
+Kanser Evrim Simülatörü v2 — Multi-Objective NSGA-II + ODE + Uzamsal Etkileşim
+Evrimsel seçilim ile ilaç duyarlılığı, direnç gelişimi ve tümör yükünü optimize etme
+"""
+
 import streamlit as st
-import torch
 import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import plotly.express as px
-import time
+import pygad
+from scipy.integrate import odeint
+import seaborn as sns
+import matplotlib.pyplot as plt
+import json
+import base64
+import io
+from datetime import datetime
 
-# ==============================
-# 1. PROJE AÇIKLAMASI
-# ==============================
-st.set_page_config(page_title="GPU Evrimsel Hastalık Simülasyonu", layout="wide")
-st.title("⚡ GPU Hızlandırmalı Evrimsel Hastalık Simülasyonu")
+# ────────────────────────────────────────────────
+#               SABİT PARAMETRELER
+# ────────────────────────────────────────────────
 
-st.markdown("""
-Bu platform **doktora seviyesinde hesaplamalı biyoloji simülasyonu** sunar.  
-- GPU ile milyonlarca hücreyi paralel simüle eder
-- Multi-objective evrimsel algoritma ile **hastalığı çözme ve yan etki minimizasyonu**
-- Kanser, viral enfeksiyon ve metabolik hastalıklar için evrimsel optimizasyon
-""")
+NUM_GENES = 20              # Daha gerçekçi genom boyutu
+GENE_SPACE = [0, 1]         # Binary (0=WT, 1=mutant)
+POP_SIZE_DEFAULT = 400
+NUM_GENERATIONS_DEFAULT = 150
+MUTATION_PCT_DEFAULT = 7.5
 
-# ==============================
-# 2. Kullanıcı Girdileri
-# ==============================
-st.sidebar.header("Simülasyon Parametreleri")
-disease = st.sidebar.selectbox("Hastalık Seçimi", ["Kanser", "Viral Enfeksiyon", "Metabolik Bozukluk"])
-pop_size = st.sidebar.number_input("Popülasyon Boyutu (milyon)", 1, 50, 5) * 1000000
-gens = st.sidebar.number_input("Nesil Sayısı", 1, 100, 20)
-genome_len = st.sidebar.number_input("Gen Dizilim Uzunluğu", 5, 50, 20)
-mutation_rate = st.sidebar.slider("Mutasyon Oranı (%)", 0.0, 100.0, 5.0)
-elite_fraction = st.sidebar.slider("Elitizm (%)", 0, 50, 20)
+GENE_LABELS = [
+    "Proliferasyon (↑)", "Apoptoz inhibisyonu (↑)", "ABC efflux (↑)", "DNA onarım (↑)",
+    "Angiogenez (↑)", "İmmün kaçış (↑)", "Metastaz (↑)", "Oksidatif stres direnci (↑)",
+    "Hipoksi adaptasyonu (↑)", "Kök hücre özelliği (↑)", "EMT (↑)", "Telomeraz (↑)",
+    "PI3K/AKT aktivasyonu (↑)", "MAPK yolu (↑)", "WNT/β-catenin (↑)", "NOTCH (↑)",
+    "TGF-β direnci (↑)", "Apoptoz kaçış (BCL-2 ↑)", "Checkpoint inhibisyonu (↑)", "Mikroçevre desteği (↑)"
+]
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-st.sidebar.write(f"GPU Durumu: {device}")
+# ────────────────────────────────────────────────
+#               ODE MODELİ — Tümör + İlaç Dinamiği
+# ────────────────────────────────────────────────
+def tumor_dynamics(y, t, params, drug_conc):
+    T, D = y  # T: tümör boyutu, D: ilaç konsantrasyonu
+    r, K, alpha, decay = params
+    dTdt = r * T * (1 - T/K) - alpha * drug_conc * T
+    dDdt = -decay * D
+    return [dTdt, dDdt]
 
-# ==============================
-# 3. Tensor Tabanlı Evrimsel Fonksiyonlar
-# ==============================
-def initialize_population(pop_size, genome_len):
-    return torch.rand((pop_size, genome_len), device=device)
-
-def evaluate_fitness(pop, disease_type):
-    # Multi-objective fitness: [hastalığı yok etme, yan etki]
-    if disease_type == "Kanser":
-        disease_fitness = pop.sum(dim=1)
-        side_effect = torch.var(pop, dim=1)
-    elif disease_type == "Viral Enfeksiyon":
-        disease_fitness = pop.prod(dim=1)
-        side_effect = torch.mean((pop-0.5)**2, dim=1)
-    else:
-        disease_fitness = pop.mean(dim=1)
-        side_effect = torch.var(pop, dim=1)
-    # Normalize
-    disease_fitness = (disease_fitness - disease_fitness.min()) / (disease_fitness.max()-disease_fitness.min()+1e-6)
-    side_effect = (side_effect - side_effect.min()) / (side_effect.max()-side_effect.min()+1e-6)
-    # Multi-objective fitness: yüksek disease_fitness, düşük side_effect
-    fitness = disease_fitness - side_effect
-    return fitness, disease_fitness, side_effect
-
-def evolve(pop, mutation_rate, elite_fraction):
-    fitness, _, _ = evaluate_fitness(pop, disease)
-    num_elite = max(1, int(elite_fraction/100 * pop.size(0)))
-    elite_idx = torch.topk(fitness, num_elite).indices
-    elite = pop[elite_idx]
-    # Çoğalt ve mutasyon uygula
-    new_pop = elite.repeat(int(np.ceil(pop.size(0)/num_elite)), 1)[:pop.size(0)]
-    mutation_mask = (torch.rand_like(new_pop) < mutation_rate/100).float()
-    mutation_values = torch.randn_like(new_pop) * 0.1
-    new_pop = torch.clamp(new_pop + mutation_mask*mutation_values, 0.0, 1.0)
-    return new_pop
-
-# ==============================
-# 4. Simülasyon Başlat
-# ==============================
-if st.button("Simülasyonu Başlat"):
-    st.write(f"Simülasyon başlatıldı: Popülasyon {pop_size}, Nesil {gens}, Gen Uzunluğu {genome_len}")
-    pop = initialize_population(pop_size, genome_len)
-    best_history = []
-    disease_history = []
-    side_effect_history = []
-
-    progress_bar = st.progress(0)
-    for gen in range(gens):
-        pop = evolve(pop, mutation_rate, elite_fraction)
-        fitness, disease_f, side_eff = evaluate_fitness(pop, disease)
-        best_history.append(fitness.max().item())
-        disease_history.append(disease_f.max().item())
-        side_effect_history.append(side_eff.mean().item())
-        progress_bar.progress((gen+1)/gens)
+def simulate_tumor_growth(genotype, drug_strength, steps=100):
+    # Genotipe göre parametreler (basitleştirilmiş)
+    resistance = np.sum(genotype) / NUM_GENES
+    r_base = 0.12
+    r = r_base * (1 + 1.5 * genotype[0]) * (1 - 0.6 * resistance)
+    K = 1e6
+    alpha = 0.015 * (1 - 0.8 * resistance)  # ilaç etkinliği dirençle azalır
+    decay = 0.05
     
-    st.success("Simülasyon tamamlandı!")
+    y0 = [100.0, drug_strength * 10.0]  # başlangıç tümör + ilaç
+    t = np.linspace(0, 50, steps)
+    sol = odeint(tumor_dynamics, y0, t, args=([r, K, alpha, decay], drug_strength))
+    final_tumor = sol[-1, 0]
+    return final_tumor
 
-    # ==============================
-    # 5. Sonuç Görselleştirme
-    # ==============================
-    st.subheader("Fitness Zaman Serisi (Multi-Objective)")
-    fig1 = px.line(x=list(range(gens)), y=best_history, labels={'x':'Nesil', 'y':'Fitness'})
-    st.plotly_chart(fig1, use_container_width=True)
+# ────────────────────────────────────────────────
+#               MULTI-OBJECTIVE FITNESS (NSGA-II)
+# ────────────────────────────────────────────────
+def fitness_func(ga_instance, solution, solution_idx):
+    """
+    3 amaç (hepsi minimize edilecek):
+    1. Final tümör boyutu (küçük = iyi)
+    2. Direnç gelişme potansiyeli (yüksek mutasyon = kötü)
+    3. İlaç dozu gereksinimi (yüksek doz = kötü)
+    """
+    drug_strength = ga_instance.drug_strength
+    
+    tumor_size = simulate_tumor_growth(solution, drug_strength)
+    resistance_potential = np.sum(solution) / NUM_GENES
+    required_dose = tumor_size / (0.01 + (1 - resistance_potential))  # dirençli ise daha yüksek doz
+    
+    # NSGA-II için tuple döndür (hepsi minimize)
+    return (tumor_size, resistance_potential, required_dose)
 
-    st.subheader("Hastalık ve Yan Etki Eğilimleri")
-    fig2 = px.line(x=list(range(gens)), y=disease_history, labels={'x':'Nesil', 'y':'Hastalık Fitness'})
-    fig3 = px.line(x=list(range(gens)), y=side_effect_history, labels={'x':'Nesil', 'y':'Yan Etki'})
-    st.plotly_chart(fig2, use_container_width=True)
-    st.plotly_chart(fig3, use_container_width=True)
+# ────────────────────────────────────────────────
+#               STREAMLIT APP
+# ────────────────────────────────────────────────
+st.set_page_config(page_title="Kanser Evrim Simülatörü v2 — Multi-Objective", layout="wide", page_icon="🧬")
 
-    st.subheader("En İyi Hücre Genomu (Son Nesil)")
-    best_idx = torch.argmax(fitness)
-    st.write(pop[best_idx].cpu().numpy())
+st.title("🧬 Kanser Hücre Evrimi Simülatörü v2")
+st.markdown("**Multi-objective NSGA-II** ile tümör boyutu, direnç ve ilaç dozu trade-off'unu optimize ediyoruz.")
 
-# ==============================
-# 6. Site Alt Bilgisi
-# ==============================
-st.markdown("---")
-st.markdown("""
-**Bu site nedir?**  
-GPU hızlandırmalı **doktora seviyesi hesaplamalı biyoloji simülasyonu**.  
-- Multi-objective evrimsel algoritma ile milyonlarca hücreyi paralel simüle eder
-- Hastalıkla mücadele kapasitesi ve yan etkileri optimize eder
+# ── Sidebar ───────────────────────────────────────
+with st.sidebar:
+    st.header("Simülasyon Kontrolleri")
+    
+    preset = st.selectbox("Kanser Ön Ayarı", ["Agresif", "Dirençli", "Yavaş Büyüyen", "Özel"])
+    
+    if preset == "Agresif":
+        pop_size = st.slider("Popülasyon", 200, 1200, 600)
+        gens = st.slider("Nesil", 50, 400, 180)
+        mut_pct = st.slider("Mutasyon %", 2.0, 20.0, 9.0)
+        drug_str = st.slider("İlaç Şiddeti", 0.0, 12.0, 5.5, step=0.5)
+    elif preset == "Dirençli":
+        pop_size = st.slider("Popülasyon", 200, 1200, 800)
+        gens = st.slider("Nesil", 50, 400, 250)
+        mut_pct = st.slider("Mutasyon %", 2.0, 20.0, 5.5)
+        drug_str = st.slider("İlaç Şiddeti", 0.0, 12.0, 8.5, step=0.5)
+    else:
+        pop_size = st.slider("Popülasyon", 200, 1200, 400)
+        gens = st.slider("Nesil", 50, 400, 120)
+        mut_pct = st.slider("Mutasyon %", 2.0, 20.0, 7.5)
+        drug_str = st.slider("İlaç Şiddeti", 0.0, 12.0, 4.0, step=0.5)
+    
+    run_btn = st.button("🚀 Simülasyonu Başlat", type="primary")
 
-**Gösterilen değerler:**
-- Fitness: hücrenin hastalığı çözme ve yan etki minimizasyonu kapasitesi
-- Disease Fitness: hastalığı yok etme yeteneği
-- Side Effect: yan etki düzeyi
-- Genome: hücrenin gen dizilimi (0-1 normalizasyonlu)
-- Nesiller: evrimsel süreç boyunca seçilim ve mutasyon uygulanmış popülasyon
-""")
+# ── Tabs ──────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["Kontroller & Sonuç", "Pareto Front", "En İyi Çözümler", "İndir & Analiz"])
+
+if run_btn:
+    with st.spinner("NSGA-II çalışıyor... (1–5 dk arası)"):
+        ga = pygad.GA(
+            num_generations=gens,
+            num_parents_mating=pop_size//4,
+            fitness_func=fitness_func,
+            sol_per_pop=pop_size,
+            num_genes=NUM_GENES,
+            gene_space=GENE_SPACE,
+            parent_selection_type="nsga2",
+            keep_parents=2,
+            crossover_type="single_point",
+            mutation_percent_genes=mut_pct,
+            mutation_type="random",
+            mutation_by_replacement=True,
+            save_best_solutions=False,  # NSGA-II için population yeterli
+            suppress_warnings=True
+        )
+        ga.drug_strength = drug_str
+        ga.run()
+        
+        solutions = ga.population
+        fitnesses = np.array([fitness_func(ga, sol, 0) for sol in solutions])
+        
+        st.session_state.ga = ga
+        st.session_state.fitnesses = fitnesses
+        st.session_state.solutions = solutions
+        st.success("Simülasyon tamamlandı!")
+
+# ── Tab 1 ─────────────────────────────────────────
+with tab1:
+    if 'ga' in st.session_state:
+        st.subheader("Pareto Özeti")
+        fit = st.session_state.fitnesses
+        df_summary = pd.DataFrame(fit, columns=["Tümör Boyutu", "Direnç Potansiyeli", "Gerekli Doz"])
+        st.dataframe(df_summary.describe().round(2))
+        
+        fig = px.scatter_3d(
+            df_summary,
+            x="Tümör Boyutu", y="Direnç Potansiyeli", z="Gerekli Doz",
+            color="Tümör Boyutu",
+            title="Pareto Front (3D)"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+# ── Tab 2 ─────────────────────────────────────────
+with tab2:
+    if 'fitnesses' in st.session_state:
+        st.subheader("Pareto Front 2D Projeksiyonları")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_xy = px.scatter(
+                x=st.session_state.fitnesses[:,0],
+                y=st.session_state.fitnesses[:,1],
+                labels={"x":"Tümör Boyutu", "y":"Direnç Potansiyeli"},
+                title="Tümör vs Direnç"
+            )
+            st.plotly_chart(fig_xy)
+        
+        with col2:
+            fig_xz = px.scatter(
+                x=st.session_state.fitnesses[:,0],
+                y=st.session_state.fitnesses[:,2],
+                labels={"x":"Tümör Boyutu", "y":"Gerekli Doz"},
+                title="Tümör vs Doz"
+            )
+            st.plotly_chart(fig_xz)
+
+# ── Tab 3 ─────────────────────────────────────────
+with tab3:
+    if 'solutions' in st.session_state:
+        st.subheader("En İyi Çözümlerden Seç (en düşük tümör boyutu ilk 5)")
+        fit_df = pd.DataFrame(st.session_state.fitnesses, columns=["Tümör", "Direnç", "Doz"])
+        fit_df["idx"] = range(len(fit_df))
+        top5 = fit_df.nsmallest(5, "Tümör")
+        
+        selected_idx = st.selectbox("Çözüm seç", top5["idx"].values)
+        
+        geno = st.session_state.solutions[selected_idx].astype(int)
+        df_gen = pd.DataFrame({
+            "Loküs": range(1, NUM_GENES+1),
+            "Anlam": GENE_LABELS,
+            "Mutant?": geno
+        })
+        st.dataframe(df_gen.style.background_gradient(cmap="Reds", subset=["Mutant?"]))
+
+# ── Tab 4 ─────────────────────────────────────────
+with tab4:
+    if 'solutions' in st.session_state:
+        st.subheader("Sonuçları İndir")
+        
+        # CSV indirme
+        df_out = pd.DataFrame(st.session_state.solutions)
+        df_out["tumor_size"] = st.session_state.fitnesses[:,0]
+        df_out["resistance"] = st.session_state.fitnesses[:,1]
+        df_out["dose"] = st.session_state.fitnesses[:,2]
+        
+        csv = df_out.to_csv(index=False).encode('utf-8')
+        b64 = base64.b64encode(csv).decode()
+        href = f'<a href="data:file/csv;base64,{b64}" download="cancer_pareto_{datetime.now().strftime("%Y%m%d_%H%M")}.csv">CSV İndir</a>'
+        st.markdown(href, unsafe_allow_html=True)
+        
+        # JSON indirme
+        json_str = json.dumps({
+            "metadata": {"gens": gens, "pop": pop_size, "drug": drug_str},
+            "pareto": df_out.to_dict(orient="records")
+        }, indent=2)
+        b64_json = base64.b64encode(json_str.encode()).decode()
+        href_json = f'<a href="data:application/json;base64,{b64_json}" download="cancer_pareto.json">JSON İndir</a>'
+        st.markdown(href_json, unsafe_allow_html=True)
+
+st.caption("v2 — Multi-obj NSGA-II + ODE tümör modeli • Eğitim/hipotez amaçlı • Gerçek tedavi için kullanılmaz")
