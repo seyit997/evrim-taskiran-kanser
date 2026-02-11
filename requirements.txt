@@ -1,14 +1,8 @@
-# --- Core Numerical & Simulation ---
-numpy==1.26.4          # Yüksek performanslı matris işlemleri ve PDE çözücü
-scipy==1.12.0          # Laplacian konvolüsyonu (convolve) ve sinyal işleme
-pandas==2.2.0           # Simülasyon verilerinin zaman serisi analizi
-
-# --- Web Interface & UI ---
-streamlit==1.31.0       # Araştırma arayüzü ve parametre kontrolleri
-
-# --- Visualization & Plotting ---
-matplotlib==3.8.2       # Clonal dynamics, stackplots ve faz diyagramları
-seaborn==0.13.2          # Duyarlılık analizleri (Heatmaps) için gelişmiş görselleştirme
-
-# --- Performance Optimization (Opsiyonel ama Tavsiye Edilir) ---
-numexpr==2.9.0          # Büyük PDE gridlerinde hesaplama hızlandırma
+streamlit
+pandas
+plotly
+biopython
+fpdf
+requests
+py3Dmol
+streamlit-lottie
