@@ -1,8 +1,11 @@
+import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import convolve
 import pandas as pd
-from tqdm import tqdm
+
+# Sayfa Yapılandırması
+st.set_page_config(page_title="Kanser Evrim Simülatörü", layout="wide")
 
 class AdvancedOncoSimulator:
     def __init__(self, size=60, mu=0.03, cost_factor=0.3):
@@ -10,22 +13,18 @@ class AdvancedOncoSimulator:
         self.dt = 0.1
         self.mu = mu
         self.cost_factor = cost_factor
-        self.K = 1.0  # Taşıma kapasitesi
+        self.K = 1.0
         self.reset()
 
     def reset(self):
-        """Gridleri ve başlangıç tümörünü sıfırla."""
         self.S = np.zeros((self.size, self.size))
         self.R = np.zeros((self.size, self.size))
         self.ResLevel = np.zeros((self.size, self.size))
         self.Oxygen = np.ones((self.size, self.size))
-        
-        # Merkezde tümör tohumlama (Seed)
         mid = self.size // 2
         self.S[mid-3:mid+4, mid-3:mid+4] = 0.5
 
     def update_microenvironment(self):
-        """Oksijen difüzyonunu ve tüketimini PDE ile çöz."""
         laplacian_kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
         lap = convolve(self.Oxygen, laplacian_kernel, mode='nearest')
         consumption = 0.05 * (self.S + self.R)
@@ -33,24 +32,18 @@ class AdvancedOncoSimulator:
         self.Oxygen = np.clip(self.Oxygen, 0.05, 1.0)
 
     def evolution_step(self, drug_dose):
-        """Hücresel büyüme, ölüm ve mutasyon dinamikleri."""
-        # 1. Fitness Hesaplama (Direnç Maliyeti Dahil)
         s_fit = 0.4 * self.Oxygen
         r_fit = 0.28 * self.Oxygen * (1 - self.ResLevel * self.cost_factor)
         
-        # 2. Ölüm (Doz-Tepki)
         self.S *= np.clip(1 - (drug_dose * 0.95 + 0.02) * self.dt, 0, 1)
         self.R *= np.clip(1 - (drug_dose * (1 - self.ResLevel) * 0.1 + 0.02) * self.dt, 0, 1)
 
-        # 3. Uzamsal Yayılım (Diffusion-like ABM)
         kernel = np.array([[1,1,1],[1,1,1],[1,1,1]]) / 9.0
         space = np.clip(1.0 - (self.S + self.R), 0, 1)
         
-        # Hassas hücre büyümesi
         s_growth = self.S * s_fit * space * self.dt
         self.S += convolve(s_growth, kernel, mode='nearest')
         
-        # Evrimsel Mutasyon (Gaussian Noise ile Direnç Artışı)
         mut_mask = (np.random.rand(self.size, self.size) < self.mu) & (self.S > 0.05)
         if np.any(mut_mask):
             noise = np.random.normal(0.05, 0.02, size=np.sum(mut_mask))
@@ -58,81 +51,58 @@ class AdvancedOncoSimulator:
             self.R[mut_mask] += self.S[mut_mask] * 0.2
             self.S[mut_mask] *= 0.8
             
-        # Dirençli hücre büyümesi
         r_growth = self.R * r_fit * space * self.dt
         self.R += convolve(r_growth, kernel, mode='nearest')
 
-        # Global Sınırlama (Taşıma Kapasitesi)
         total = self.S + self.R
         overshoot = np.where(total > self.K, self.K / (total + 1e-9), 1.0)
         self.S *= overshoot; self.R *= overshoot
 
-def run_trial(strategy='MTD', n_replicates=10, mutation_rate=0.03, cost=0.3):
-    """Belirli bir strateji için çoklu replikasyon deneyleri."""
-    all_pfs = []
-    all_auc = []
-    
+def run_trial(strategy, n_replicates, mu, cost):
+    pfs_list = []
     for _ in range(n_replicates):
-        sim = AdvancedOncoSimulator(mu=mutation_rate, cost_factor=cost)
-        sim.reset()
-        tumor_history = []
+        sim = AdvancedOncoSimulator(mu=mu, cost_factor=cost)
         initial_vol = np.sum(sim.S)
-        
-        for t in range(400):
+        t = 0
+        while t < 400:
             current_total = np.sum(sim.S + sim.R)
-            tumor_history.append(current_total)
-            
-            # Tedavi Karar Mekanizması
-            if strategy == 'MTD':
-                dose = 1.0 if t > 50 else 0.0
-            elif strategy == 'Adaptive':
-                # Tümör başlangıç hacminin %10 üzerine çıkarsa ilaç ver
-                dose = 1.0 if current_total > initial_vol * 1.1 else 0.0
-            else:
-                dose = 0.0
-            
+            dose = 1.0 if (strategy == 'MTD' and t > 50) or (strategy == 'Adaptive' and current_total > initial_vol * 1.1) else 0.0
             sim.update_microenvironment()
             sim.evolution_step(dose)
-            
-            # Başarısızlık Kriteri (Progression): Başlangıç hacminin 3 katı
-            if current_total > initial_vol * 3 and t > 60:
-                break
-        
-        all_pfs.append(len(tumor_history))
-        # NumPy 2.0+ uyumlu integral (AUC) hesaplama
-        # Not: Eğer eski numpy kullanıyorsanız np.trapz olarak değiştirebilirsiniz.
-        all_auc.append(np.trapezoid(tumor_history)) 
-        
-    return np.mean(all_pfs), np.std(all_pfs), np.mean(all_auc)
+            if current_total > initial_vol * 3 and t > 60: break
+            t += 1
+        pfs_list.append(t)
+    return np.mean(pfs_list), np.std(pfs_list)
 
-# --- ANA ARAŞTIRMA VE ANALİZ DÖNGÜSÜ ---
-if __name__ == "__main__":
-    mut_range = [0.01, 0.03, 0.05]
-    cost_range = [0.1, 0.3, 0.5]
-    n_rep = 5 # Akademik kesinlik için gerçek çalışmada artırılmalıdır
+# --- Streamlit Arayüzü ---
+st.title("🧬 Evrimsel Kanser Tedavi Simülatörü")
+st.markdown("Bu model, MTD ve Adaptif Terapi stratejilerini klonal rekabet altında karşılaştırır.")
 
-    results = []
-    print("In-silico Deneyler Başlıyor (MTD vs Adaptive)...")
+with st.sidebar:
+    st.header("🔬 Parametreler")
+    n_rep = st.slider("Replikasyon Sayısı", 1, 10, 3)
+    mu_val = st.slider("Mutasyon Hızı", 0.01, 0.10, 0.03)
+    cost_val = st.slider("Direnç Maliyeti (Fitness Cost)", 0.1, 0.5, 0.3)
+    start_sim = st.button("Deneyi Başlat")
 
-    for m in tqdm(mut_range):
-        for c in cost_range:
-            # Replikasyonlu MTD Deneyi
-            m_pfs, m_std, m_auc = run_trial('MTD', n_rep, m, c)
-            # Replikasyonlu Adaptive Deneyi
-            a_pfs, a_std, a_auc = run_trial('Adaptive', n_rep, m, c)
-            
-            results.append({
-                'Mutation_Rate': m, 
-                'Cost_Factor': c,
-                'MTD_PFS': m_pfs, 
-                'ADA_PFS': a_pfs,
-                'PFS_Gain': a_pfs - m_pfs,
-                'AUC_Ratio': a_auc / m_auc
-            })
+if start_sim:
+    col1, col2 = st.columns(2)
+    
+    with st.spinner('Simülasyonlar koşturuluyor...'):
+        m_pfs, m_std = run_trial('MTD', n_rep, mu_val, cost_val)
+        a_pfs, a_std = run_trial('Adaptive', n_rep, mu_val, cost_val)
 
-    # Verileri DataFrame'e dönüştür ve göster
-    df = pd.DataFrame(results)
-    print("\n" + "="*30)
-    print("DENEY SONUÇLARI (ÖZET)")
-    print("="*30)
-    print(df[['Mutation_Rate', 'Cost_Factor', 'PFS_Gain', 'AUC_Ratio']])
+    with col1:
+        st.metric("MTD Sağkalım (PFS)", f"{m_pfs:.1f} gün")
+        st.metric("Adaptif Sağkalım (PFS)", f"{a_pfs:.1f} gün")
+
+    with col2:
+        fig, ax = plt.subplots()
+        ax.bar(["MTD", "Adaptive"], [m_pfs, a_pfs], yerr=[m_std, a_std], color=['#e74c3c', '#3498db'], capsize=10)
+        ax.set_ylabel("Zaman Adımı (PFS)")
+        ax.set_title("Strateji Karşılaştırması")
+        st.pyplot(fig)
+
+    st.success(f"Adaptif terapi, sağkalımı %{((a_pfs-m_pfs)/m_pfs*100):.1f} oranında artırdı.")
+else:
+    st.info("Simülasyonu başlatmak için soldaki butona tıklayın.")
