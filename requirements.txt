@@ -1,4 +1,4 @@
-streamlit>=1.32.0
-numpy>=1.26.4
-plotly>=5.18.0
-scipy>=1.13.0
+streamlit==1.30.0
+torch==2.1.0
+numpy==1.26.5
+plotly==5.21.0
