@@ -1,3 +1,32 @@
+"""
+Deep Evolutionary Antidote Optimization Framework v2.5
+Multi-Objective PDE-Based Tumor Therapy Optimization Platform
+Academic In-Silico Demonstration with Streamlit Interface
+
+Author: Computational Oncology Simulation Team
+Version: 2.5.0 (Academic Publication Grade)
+License: MIT (For Academic Use)
+
+Mathematical Foundation:
+------------------------
+This framework implements a multi-objective evolutionary optimization approach
+for cancer treatment parameter identification using:
+
+1. Fisher-Kolmogorov Reaction-Diffusion PDE
+2. NSGA-II Multi-Objective Genetic Algorithm
+3. Pareto Optimality Analysis
+4. Stochastic Gradient-Free Optimization
+
+References:
+-----------
+[1] Deb, K., et al. (2002). A fast and elitist multiobjective genetic algorithm: NSGA-II.
+    IEEE TEVC, 6(2), 182-197.
+[2] Gatenby, R.A., et al. (2009). Adaptive therapy. Cancer Research, 69(11).
+[3] Murray, J.D. (2002). Mathematical Biology I: An Introduction. Springer.
+
+DISCLAIMER: This is an in-silico computational demonstration for academic
+purposes only. Not for clinical use.
+"""
 
 import numpy as np
 import pandas as pd
@@ -7,14 +36,13 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import streamlit as st
-from scipy.ndimage import laplace, gaussian_filter
-from scipy.stats import pearsonr, spearmanr
+from scipy.ndimage import laplace
+from scipy import stats
 from deap import base, creator, tools, algorithms
 import random
 import json
 import logging
 from datetime import datetime
-from io import BytesIO
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -304,9 +332,10 @@ class MultiObjectiveOptimizer:
         """Configure DEAP framework for NSGA-II."""
         
         # Clear existing classes to avoid conflicts
-        if hasattr(creator, "FitnessMulti"):
+        creator_class_attrs = [attr for attr in dir(creator) if not attr.startswith('__')]
+        if 'FitnessMulti' in creator_class_attrs:
             del creator.FitnessMulti
-        if hasattr(creator, "Individual"):
+        if 'Individual' in creator_class_attrs:
             del creator.Individual
         
         # Multi-objective fitness: minimize both objectives
@@ -399,7 +428,7 @@ class MultiObjectiveOptimizer:
         logbook = tools.Logbook()
         
         # Evaluate initial population
-        fitnesses = map(self.toolbox.evaluate, population)
+        fitnesses = list(map(self.toolbox.evaluate, population))
         for ind, fit in zip(population, fitnesses):
             ind.fitness.values = fit
         
@@ -420,7 +449,7 @@ class MultiObjectiveOptimizer:
             
             # Evaluate offspring
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-            fitnesses = map(self.toolbox.evaluate, invalid_ind)
+            fitnesses = list(map(self.toolbox.evaluate, invalid_ind))
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
             
@@ -1241,6 +1270,11 @@ def main():
     <b>DECTOP v2.5 Academic Edition</b> | Multi-Objective PDE-Based Cancer Treatment Optimization<br>
     © 2026 | Open Source (MIT License) | For Academic Research & Education<br>
     <i>Reproducible Science • Open Methods • Transparent Research</i>
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main() • Open Methods • Transparent Research</i>
     </div>
     """, unsafe_allow_html=True)
 
