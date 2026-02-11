@@ -1,5 +1,4 @@
 streamlit==1.30.0
-numpy>=1.24.0
-plotly>=5.18.0
-scipy>=1.11.0
-torch>=2.2.0  # Python 3.13 desteği için sürümü yükselttik
+torch==2.1.0+cu118  # CUDA varsa GPU için
+numpy==1.26.5
+plotly==5.21.0
