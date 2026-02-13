@@ -1,8 +1,22 @@
+# Core Framework
 streamlit==1.31.0
-deap==1.3.3
-numpy==1.26.4
+
+# Scientific Computing
+numpy==1.24.3
 scipy==1.11.4
-pandas==2.2.0
+pandas==2.0.3
+
+# Evolutionary Algorithms
+deap==1.4.1
+
+# Chemistry & Drug Discovery
+rdkit==2023.9.4
+
+# Visualization
 plotly==5.18.0
-rdkit==2023.9.6
-requests==2.32.3
+
+# API & Web
+requests==2.31.0
+
+# Utilities
+python-dateutil==2.8.2
