@@ -552,11 +552,9 @@ def create_nsga2_toolbox(config, mut_prob, cross_prob):
     )
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
     
-    # Genetic operators
-    toolbox.register("mate", tools.cxSimulatedBinaryBounded, 
-                     low=-3.0, up=3.0, eta=20.0)
-    toolbox.register("mutate", tools.mutPolynomialBounded, 
-                     low=-3.0, up=3.0, eta=20.0, indpb=mut_prob)
+    # Genetic operators (using simpler, more stable methods)
+    toolbox.register("mate", tools.cxBlend, alpha=0.5)
+    toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=1.0, indpb=mut_prob)
     toolbox.register("select", tools.selNSGA2)
     
     return toolbox
