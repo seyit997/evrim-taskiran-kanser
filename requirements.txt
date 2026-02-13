@@ -1,12 +1,10 @@
-# requirements.txt - Evrimsel Kanser Tedavi Simülasyonu (V10 - Optimal Control Sigmoid Policy)
-# Tarih: Şubat 2026 itibarıyla stabil ve uyumlu versiyonlar
-
-streamlit==1.31.0                  # Web arayüzü ve interaktif app
-deap==1.3.3                        # Genetik algoritma ve NSGA-II için
-numpy==1.26.4                      # Sayısal işlemler, array yönetimi
-scipy==1.11.4                      # ODE çözümü (odeint) + eigenvalue (eigvals)
-pandas==2.2.0                      # Veri çerçeveleri, MAF parse, CSV export
-matplotlib==3.8.0                  # Statik grafik desteği (opsiyonel yedek)
-plotly==5.18.0                     # İnteraktif grafik ve dashboard görselleştirme
-biopython==1.83                    # Biyolojik sekans/annotasyon desteği (gelecekte genişletilebilir)
-rdkit==2023.9.6                    # Kimyasal molekül işleme, QED, LogP, SMILES
+# requirements.txt
+streamlit==1.31.0
+deap==1.3.3
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.2.0
+plotly==5.18.0
+matplotlib==3.8.0
+rdkit==2023.9.6
+biopython==1.83
