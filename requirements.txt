@@ -3,7 +3,8 @@ numpy==1.24.4
 scipy==1.11.4
 pandas==2.1.4
 deap==1.4.1
-rdkit-pypi==2022.9.5
 plotly==5.18.0
 requests==2.31.0
 python-dateutil==2.8.2
+
+# rdkit-pypi==2022.9.5  # Removed due to Streamlit Cloud segmentation fault
