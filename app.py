@@ -1,4 +1,4 @@
-# app.py - Optimal Control Sigmoid Policy Entegrasyonlu Evrimsel Kanser Simülasyonu (NSGA-II + Eco-Evolutionary Coupling)
+# app.py - Optimal Control Sigmoid Policy Entegrasyonlu Evrimsel Kanser Simülasyonu (NSGA-II)
 import streamlit as st
 import numpy as np
 import random
@@ -8,27 +8,27 @@ from deap import base, creator, tools, algorithms
 import time
 from datetime import datetime
 from scipy.stats import entropy
-from scipy.integrate import odeint  # Hibrit ODE için
-from scipy.linalg import eigvals  # Stability analiz için
+from scipy.integrate import odeint
+from scipy.linalg import eigvals
 from rdkit import Chem
 from rdkit.Chem import Descriptors, QED
+from io import StringIO
+import gzip
 
 # -------------------------------
-#       CONFIG & HELPERS (Sigmoid Policy + Formal Jacobian + Literatür Calibration)
+#       CONFIG & HELPERS
 # -------------------------------
 st.set_page_config(page_title="Optimal Control Sigmoid Policy Simülatörü", layout="wide")
 
-# Literatür calibration (e.g. g_base=0.5 West et al. 2020 Cancer Res; cost_res=0.2 Gatenby 2019 Nat Rev Cancer; f_base Hansen et al. 2023 Front Oncol)
 CALIBRATION = {
-    "g_base": 0.5,      # Ortalama growth rate
-    "f_S_base": 1.0,    # Sensitive fitness base
-    "f_R_base": 0.8,    # Resistant base
-    "cost_res": 0.2,    # Resistance cost
-    "K": 1e6,           # Carrying capacity
-    "sigmoid_steepness": 5.0  # Sigmoid policy için steepness (Pontryagin approx için)
+    "g_base": 0.5,
+    "f_S_base": 1.0,
+    "f_R_base": 0.8,
+    "cost_res": 0.2,
+    "K": 1e6,
+    "sigmoid_steepness": 5.0
 }
 
-# Gerçek EGFR inhibitor SMILES'leri ve drug-specific resistance matrix (literatürden: 0=sensitive, 1=resistant)
 EGFR_INHIBITORS = {
     "Gefitinib": {
         "smiles": "COC1=C(C=C2C(=C1)N=CN=C2NC3=CC(=C(C=C3)F)Cl)OC4CCOCC4",
@@ -40,23 +40,21 @@ EGFR_INHIBITORS = {
     },
 }
 
-MUTATION_LABELS = ["WT", "L858R", "T790M"]  # Clone tipleri
+MUTATION_LABELS = ["WT", "L858R", "T790M"]
 
 DISEASE_PRESETS = {
     "Akciğer Kanseri (EGFR mutasyonu)": {
-        "target_gene_length": len(MUTATION_LABELS) + 3,  # 3 freq + 3 policy (threshold, high_dose, low_dose)
+        "target_gene_length": len(MUTATION_LABELS) + 3,
         "drug_affinity_weight": 0.7,
         "mutation_prob": 0.05,
         "crossover_prob": 0.7,
         "epistasis_pairs": [("L858R", "T790M", -0.3)],
-        "initial_freq": np.array([0.6, 0.3, 0.1]),  # Başlangıç frekanslar
-        "initial_N": 1e5,  # Başlangıç tümör yükü
-        "initial_policy": [0.4, 0.8, 0.2]  # Başlangıç threshold, high, low
+        "initial_freq": np.array([0.6, 0.3, 0.1]),
+        "initial_N": 1e5,
+        "initial_policy": [0.4, 0.8, 0.2]
     },
-    # Diğer presetler uyarla
 }
 
-# Örnek MAF verisi (gerçek için upload)
 EXAMPLE_MAF = """Hugo_Symbol\tEntrez_Gene_Id\tChromosome\tStart_Position\tVariant_Classification\tTumor_Sample_Barcode\tTumor_Seq_Allele2\tVariant_Type\tVAF
 EGFR\t1956\t7\t55174780\tMissense_Mutation\tTCGA-05-4384-01\tT\tSNP\t0.42
 EGFR\t1956\t7\t55191822\tMissense_Mutation\tTCGA-05-4390-01\tG\tSNP\t0.35
@@ -65,42 +63,56 @@ KRAS\t3845\t12\t25245350\tMissense_Mutation\tTCGA-05-4424-01\tT\tSNP\t0.15
 EGFR\t1956\t7\t55181378\tMissense_Mutation\tTCGA-05-4427-01\tA\tSNP\t0.10
 """
 
-# MAF parse: Mutation label'lara map et (literatür mapping: Start_Pos → label)
 POSITION_TO_LABEL = {
     55174780: "L858R",
     55191822: "T790M",
-    55181378: "Ex19del",  # Ekstra
+    55181378: "Ex19del",
 }
 
 def parse_maf(maf_data, gene_of_interest='EGFR'):
-    df = pd.read_csv(pd.compat.StringIO(maf_data), sep='\t')
-    df_gene = df[df['Hugo_Symbol'] == gene_of_interest]
-    if df_gene.empty:
-        return {}
-    mut_freq = df_gene.groupby('Start_Position').size() / len(df_gene['Tumor_Sample_Barcode'].unique())
-    hotspots = {}
-    for _, row in df_gene.iterrows():
-        label = POSITION_TO_LABEL.get(row['Start_Position'], "Unknown")
-        hotspots[label] = {'freq': mut_freq.get(row['Start_Position'], 0), 
-                           'impact': 0.8 if 'Missense' in row['Variant_Classification'] else 0.5, 
-                           'vaf': row.get('VAF', 0.3)}
-    return hotspots
+    if not maf_data or not maf_data.strip():
+        st.warning("MAF verisi boş veya geçersiz. Örnek veri kullanılıyor.")
+        maf_data = EXAMPLE_MAF
 
-# Genotype to SMILES: Mutation sum'ı ile inhibitor seç (co-evolution proxy)
+    try:
+        df = pd.read_csv(StringIO(maf_data), sep='\t', comment='#', low_memory=False)
+        # Eğer ilk satır yorum ise tekrar oku
+        if df.columns[0].startswith('#'):
+            df = pd.read_csv(StringIO(maf_data), sep='\t', comment='#', skiprows=1, low_memory=False)
+        
+        df_gene = df[df['Hugo_Symbol'] == gene_of_interest]
+        if df_gene.empty:
+            st.info(f"{gene_of_interest} mutasyonu bulunamadı.")
+            return {}
+        
+        mut_freq = df_gene.groupby('Start_Position').size() / len(df_gene['Tumor_Sample_Barcode'].unique())
+        hotspots = {}
+        for idx, row in df_gene.iterrows():
+            label = POSITION_TO_LABEL.get(row['Start_Position'], "Unknown")
+            hotspots[label] = {
+                'freq': mut_freq.get(row['Start_Position'], 0),
+                'impact': 0.8 if 'Missense' in row.get('Variant_Classification', '') else 0.5,
+                'vaf': row.get('VAF', 0.3)
+            }
+        return hotspots
+    
+    except Exception as e:
+        st.error(f"MAF dosyası okunamadı: {str(e)}. Örnek veri ile devam ediliyor.")
+        return parse_maf(EXAMPLE_MAF, gene_of_interest)
+
 def genotype_to_smiles(genotype_freq):
     mut_sum = sum(genotype_freq)
-    index = int(mut_sum * 10) % len(EGFR_INHIBITORS)  # Freq-based seç
+    index = int(mut_sum * 10) % len(EGFR_INHIBITORS)
     drug_name = list(EGFR_INHIBITORS.keys())[index]
     return EGFR_INHIBITORS[drug_name]["smiles"], drug_name
 
-# Hibrit Eco-Evolutionary ODE: \dot{N} = N g(x) (1 - N/K), \dot{x} = x (f - φ), g(x) = sum x f
 def hibrit_dynamics(y, t, fitnesses, drug_conc, K, cost_res):
     N = y[0]
     x = y[1:]
     effective_f = fitnesses * (1 - drug_conc)
-    effective_f[2] -= cost_res  # Yalnız resistant clone'a cost uygula
+    effective_f[2] -= cost_res  # Sadece resistant clone'a cost uygula
     phi = np.dot(x, effective_f)
-    g = np.dot(x, effective_f)  # Ortalama growth
+    g = np.dot(x, effective_f)
     dNdt = N * g * (1 - N / K)
     dxdt = x * (effective_f - phi)
     return np.concatenate(([dNdt], dxdt))
@@ -115,11 +127,9 @@ def simulate_hibrit_dynamics(initial_freq, initial_N, generations, calibration, 
     for gen in range(generations):
         N = current_state[0]
         x = current_state[1:]
-        resistant_fraction = x[2]  # T790M
-        # Sigmoid policy: u(t) = low + (high - low) / (1 + exp(-steepness (resistant_fraction - threshold)))
+        resistant_fraction = x[2]
         drug_conc = low_dose + (high_dose - low_dose) / (1 + np.exp(-steepness * (resistant_fraction - threshold)))
         
-        # Genotype-dependent fitness: Literatür modüle
         fitnesses = np.array([calibration["f_S_base"], calibration["f_S_base"] - genotype_dependent["L858R"] * 0.1, 
                               calibration["f_R_base"] + genotype_dependent["T790M"] * 0.2])
         for mut_idx, mut in enumerate(MUTATION_LABELS):
@@ -129,52 +139,42 @@ def simulate_hibrit_dynamics(initial_freq, initial_N, generations, calibration, 
         t = np.linspace(0, 1, 10)
         sol = odeint(hibrit_dynamics, current_state, t, args=(fitnesses, drug_conc, calibration["K"], calibration["cost_res"]))
         current_state = sol[-1]
-        current_state[1:] /= np.sum(current_state[1:])  # Freq normalize (feedback)
+        current_state[1:] /= np.sum(current_state[1:]) or 1
         state_over_time.append(current_state)
         drug_levels.append(drug_conc)
     
-    # Formal Jacobian türetimi (Hofbauer & Sigmund 1998)
     equilibrium = current_state
     eq_N, eq_x = equilibrium[0], equilibrium[1:]
     effective_f = fitnesses * (1 - drug_conc)
-    effective_f[2] -= calibration["cost_res"]  # Cost yalnız resistant
+    effective_f[2] -= calibration["cost_res"]
     g_eq = np.dot(eq_x, effective_f)
     phi_eq = np.dot(eq_x, effective_f)
     
-    # ∂N/∂N = g_eq (1 - 2 eq_N / K)
-    dN_dN = g_eq * (1 - 2 * eq_N / K)
-    # ∂N/∂x = eq_N (1 - eq_N / K) effective_f
-    dN_dx = eq_N * (1 - eq_N / K) * effective_f
-    # ∂x/∂N = 0
+    dN_dN = g_eq * (1 - 2 * eq_N / calibration["K"])
+    dN_dx = eq_N * (1 - eq_N / calibration["K"]) * effective_f
     dx_dN = np.zeros(len(eq_x))
-    # Replicator Jacobian: diag(x) (effective_f - phi_eq) - x effective_f^T (formal)
-    dx_dx = np.diag(eq_x) @ (effective_f - phi_eq)[:, np.newaxis] - np.outer(eq_x, effective_f)
+    dx_dx = np.diag(eq_x) @ (effective_f - phi_eq) - np.outer(eq_x, effective_f)
     J = np.block([[dN_dN, dN_dx], [dx_dN[:, np.newaxis].T, dx_dx]])
     eigenvalues = eigvals(J)
     stability = "Stable" if all(np.real(eigenvalues) < 0) else "Unstable"
     
     return state_over_time, drug_levels, stability
 
-# Fitness: Drug-specific + epistaz + MAF VAF + Hibrit feedback + Sigmoid policy
 def evaluate(individual, affinity_weight, epistasis_pairs, maf_hotspots, generations, calibration, initial_freq, initial_N):
-    # Individual: [log_freq1, log_freq2, log_freq3, threshold, high_dose, low_dose]
     log_freq = individual[:3]
-    policy = individual[3:]  # GA-optimized policy
-    policy[0] = np.clip(policy[0], 0.1, 0.9)  # Threshold bounds
-    policy[1] = np.clip(policy[1], 0.5, 1.0)  # High dose
-    policy[2] = np.clip(policy[2], 0.0, policy[1] - 0.1)  # Low dose < high - margin
+    policy = individual[3:]
+    policy[0] = np.clip(policy[0], 0.1, 0.9)
+    policy[1] = np.clip(policy[1], 0.5, 1.0)
+    policy[2] = np.clip(policy[2], 0.0, policy[1] - 0.1)
     
-    # Log-freq → softmax normalize freq
     exp_vals = np.exp(log_freq)
     genotype_freq = exp_vals / np.sum(exp_vals)
     
-    # Genotype-dependent params (for hibrit)
     genotype_dependent = {MUTATION_LABELS[i]: genotype_freq[i] for i in range(len(genotype_freq))}
     for mut1, mut2, effect in epistasis_pairs:
         if genotype_dependent.get(mut1, 0) > 0 and genotype_dependent.get(mut2, 0) > 0:
-            genotype_dependent[mut2] += effect  # Epistaz modüle
+            genotype_dependent[mut2] += effect
     
-    # Resistance skoru: Drug-specific matrix + epistaz + MAF VAF
     smiles, drug_name = genotype_to_smiles(genotype_freq)
     resistance_matrix = EGFR_INHIBITORS[drug_name]["resistance_matrix"]
     resistance_score = sum(genotype_dependent[mut] * resistance_matrix.get(mut, 0.5) for mut in genotype_dependent)
@@ -182,7 +182,6 @@ def evaluate(individual, affinity_weight, epistasis_pairs, maf_hotspots, generat
         if mut in genotype_dependent and genotype_dependent[mut] > 0:
             resistance_score += hotspot['impact'] * hotspot['freq'] * (hotspot['vaf'] / 0.5)
     
-    # Affinity ve toxicity RDKit
     mol = Chem.MolFromSmiles(smiles)
     affinity = QED.qed(mol) * affinity_weight if mol else 0.5
     if mol:
@@ -192,19 +191,17 @@ def evaluate(individual, affinity_weight, epistasis_pairs, maf_hotspots, generat
     if mol:
         toxicity += (mw > 400) * 0.3
     
-    # Hibrit dynamics: Final N minimize, resistant fraction penalizasyon
     state_over_time, _, stability = simulate_hibrit_dynamics(initial_freq, initial_N, generations, calibration, genotype_dependent, maf_hotspots, policy)
     final_state = state_over_time[-1]
     final_N = final_state[0]
     final_freq = final_state[1:]
     final_resistant_fraction = final_freq[2]
-    adaptive_score = (1 - final_resistant_fraction) / (1 + final_N / calibration["K"])  # Penalizasyon + normalize
+    adaptive_score = (1 - final_resistant_fraction) / (1 + final_N / calibration["K"])
     if stability == "Unstable":
-        adaptive_score *= 0.5  # Instability penalti
+        adaptive_score *= 0.5
     
     return resistance_score, affinity * adaptive_score, toxicity
 
-# DEAP setup (individual float: 3 log-freq + 3 policy)
 def create_toolbox(gene_length, mutation_prob, crossover_prob):
     if "FitnessMulti" not in creator.__dict__:
         creator.create("FitnessMulti", base.Fitness, weights=(1.0, 1.0, -1.0))
@@ -212,7 +209,7 @@ def create_toolbox(gene_length, mutation_prob, crossover_prob):
         creator.create("Individual", list, fitness=creator.FitnessMulti)
     
     toolbox = base.Toolbox()
-    toolbox.register("attr_float", random.gauss, 0, 1)  # Log-freq ve policy için gauss
+    toolbox.register("attr_float", random.gauss, 0, 1)
     toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, gene_length)
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
     
@@ -222,14 +219,12 @@ def create_toolbox(gene_length, mutation_prob, crossover_prob):
     
     return toolbox
 
-# Klonal branching (freq-based)
 def simulate_clonal_branching(pop, num_subpops=3):
-    subpops = [pop[i::num_subpops] for i in range(num_subpops)]
-    return subpops
+    return [pop[i::num_subpops] for i in range(num_subpops)]
 
 def calculate_diversity(pop):
     pop_array = np.array(pop)
-    entropies = [entropy(np.exp(pop_array[:, i])) for i in range(3)]  # Sadece freq için
+    entropies = [entropy(np.exp(pop_array[:, i])) for i in range(3)]
     return np.mean(entropies)
 
 # -------------------------------
@@ -238,10 +233,9 @@ def calculate_diversity(pop):
 st.title("Optimal Control Sigmoid Policy Entegrasyonlu Evrimsel Kanser Simülasyonu (NSGA-II)")
 st.markdown("""
 Sigmoid policy ile nonlinear control: u(t) = low + (high - low) / (1 + exp(-steepness (r_fraction - threshold))).  
-Hibrit eco-evolutionary coupling: \dot{N} = N g(x) (1 - N/K), \dot{x} = x (f - φ). Feedback loop tam. Formal Jacobian türetildi. Gerçek MAF yükle.
+Hibrit eco-evolutionary coupling: \\dot{N} = N g(x) (1 - N/K), \\dot{x} = x (f - \\phi). Feedback loop tam. Formal Jacobian türetildi. Gerçek MAF yükle.
 """)
 
-# Sidebar - Kullanıcı girdileri
 with st.sidebar:
     st.header("Simülasyon Parametreleri")
     
@@ -254,19 +248,27 @@ with st.sidebar:
     mutation_prob = st.slider("Mutasyon Olasılığı", 0.01, 0.20, preset["mutation_prob"])
     crossover_prob = st.slider("Çaprazlama Olasılığı", 0.4, 1.0, preset["crossover_prob"])
     
-    maf_upload = st.file_uploader("TCGA MAF Dosyası Yükle (.maf veya .tsv)", type=['maf', 'tsv', 'txt'])
+    maf_upload = st.file_uploader("TCGA MAF Dosyası Yükle (.maf, .tsv, .txt, .gz)", type=['maf', 'tsv', 'txt', 'gz'])
     if maf_upload:
-        maf_data = maf_upload.read().decode('utf-8')
+        try:
+            content = maf_upload.read()
+            if maf_upload.name.endswith('.gz'):
+                content = gzip.decompress(content)
+            maf_data = content.decode('utf-8', errors='ignore')
+            st.success("MAF dosyası başarıyla yüklendi!")
+        except Exception as e:
+            st.error(f"Dosya okuma hatası: {str(e)}. Örnek veri ile devam ediliyor.")
+            maf_data = EXAMPLE_MAF
     else:
         maf_data = EXAMPLE_MAF
+        st.info("Örnek MAF verisi kullanılıyor. Gerçek dosya yüklemek için yukarıdaki alanı kullanın.")
     
     maf_hotspots = parse_maf(maf_data)
     
     run_button = st.button("Simülasyonu Başlat 🚀", type="primary")
 
-# Ana alan
 if run_button:
-    with st.spinner("Simülasyon çalışıyor... (NSGA-II + Sigmoid Policy Optimizasyonu)"):
+    with st.spinner("Simülasyon çalışıyor..."):
         start_time = time.time()
         
         toolbox = create_toolbox(preset["target_gene_length"], mutation_prob, crossover_prob)
@@ -276,7 +278,6 @@ if run_button:
                          initial_N=preset["initial_N"])
         
         pop = toolbox.population(n=pop_size)
-        
         mu = pop_size
         lambda_ = int(pop_size * 1.5)
         hof = tools.ParetoFront()
@@ -346,7 +347,6 @@ if run_button:
             fig_div.update_layout(title="Klonal Diversity", xaxis_title="Nesil", yaxis_title="Entropy")
             st.plotly_chart(fig_div, use_container_width=True)
             
-            # Hibrit sonuç grafik (best birey için)
             genotype_dependent = genotype
             state_over_time, drug_levels, stability = simulate_hibrit_dynamics(preset["initial_freq"], preset["initial_N"], generations, CALIBRATION, genotype_dependent, maf_hotspots, list(policy.values()))
             fig_hib = go.Figure()
